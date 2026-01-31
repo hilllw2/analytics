@@ -1,0 +1,17 @@
+# DataChat Analytics Platform - Docker Compose
+# Use for local "production-like" run or as reference for deployment.
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      - PORT=8000
+      - HOST=0.0.0.0
+      # Set in .env or override here for production
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - SESSION_TIMEOUT_MINUTES=${SESSION_TIMEOUT_MINUTES:-180}
+      - MAX_SESSIONS=${MAX_SESSIONS:-100}

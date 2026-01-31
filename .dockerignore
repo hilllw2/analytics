@@ -1,0 +1,45 @@
+# Git
+.git
+.gitignore
+
+# Local env (use build args or DO env instead)
+backend/.env
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.so
+.venv
+venv
+env
+
+# Node / frontend
+frontend/node_modules
+frontend/dist
+*.log
+npm-debug.log*
+
+# IDE
+.idea
+.vscode
+.cursor
+*.swp
+*.swo
+
+# Docs (optional to keep)
+# README.md
+
+# Tests (optional)
+# backend/tests
+# frontend/__tests__
+
+# Misc
+.DS_Store
+*.md
+!README.md

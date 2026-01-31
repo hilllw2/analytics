@@ -1,0 +1,41 @@
+# FastAPI & Server
+fastapi
+uvicorn[standard]
+python-multipart
+
+# Data Processing
+pandas
+numpy
+openpyxl
+xlrd
+chardet
+python-dateutil
+
+# Statistics & Analytics
+scipy
+scikit-learn
+statsmodels
+
+# Data Profiling
+ydata-profiling
+
+# Visualization
+plotly
+kaleido
+
+# LLM Integration
+google-generativeai
+
+# Utilities
+pydantic
+pydantic-settings
+python-dotenv
+uuid6
+
+# Report Generation
+jinja2
+markdown
+weasyprint
+
+# CORS
+starlette
