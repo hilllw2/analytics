@@ -1,6 +1,6 @@
 import { useRef } from 'react';
 import Plot from 'react-plotly.js';
-import { Download, Image, FileText } from 'lucide-react';
+import { Image, FileText } from 'lucide-react';
 import { api } from '../services/api';
 
 interface ChartDisplayProps {

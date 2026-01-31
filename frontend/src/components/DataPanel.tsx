@@ -1,8 +1,7 @@
 import { useState, useEffect } from 'react';
-import { Search, Filter, ArrowUpDown, RefreshCw } from 'lucide-react';
+import { Search, ArrowUpDown } from 'lucide-react';
 import { useStore } from '../store/useStore';
 import { api } from '../services/api';
-import { DataTable } from './DataTable';
 
 export function DataPanel() {
   const { activeDataset, previewData, setPreviewData } = useStore();

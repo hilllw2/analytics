@@ -6,7 +6,6 @@ import {
   Users,
   AlertTriangle,
   Layers,
-  BarChart2,
   Target
 } from 'lucide-react';
 import { useStore } from '../store/useStore';

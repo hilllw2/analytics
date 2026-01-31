@@ -1,7 +1,6 @@
 import { 
   Upload, 
   Download, 
-  Settings, 
   Database, 
   Lightbulb,
   BarChart3,

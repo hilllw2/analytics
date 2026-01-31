@@ -21,6 +21,29 @@ For local runs with a Gemini API key, create `backend/.env` (see `backend/.env.e
 
 Push this repo to GitHub (or GitLab). Digital Ocean will build from the repo.
 
+From the project root, after you have committed your code:
+
+```bash
+# If origin doesn't exist yet:
+git remote add origin https://github.com/hilllw2/analytics.git
+git branch -M main
+git push -u origin main
+```
+
+If `origin` already exists (e.g. you pushed to another repo first), either change it:
+
+```bash
+git remote set-url origin https://github.com/hilllw2/analytics.git
+git push -u origin main
+```
+
+Or add the second repo under a different remote and push there:
+
+```bash
+git remote add hilllw2 https://github.com/hilllw2/analytics.git
+git push -u hilllw2 main
+```
+
 ### 2. Create an App
 
 1. In [Digital Ocean](https://cloud.digitalocean.com/) go to **Apps** → **Create App**.
