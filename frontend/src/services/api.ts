@@ -7,7 +7,7 @@ class ApiService {
   constructor() {
     this.client = axios.create({
       baseURL: '/api',
-      timeout: 60000,
+      timeout: 120000, // 2 min for LLM + code exec + chart (insights can be slow)
     });
 
     // Add session ID to all requests

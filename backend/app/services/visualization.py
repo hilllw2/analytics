@@ -23,14 +23,39 @@ class VisualizationService:
     Service for generating interactive and exportable visualizations.
     """
     
-    # Theme presets
+    # Professional color palettes for insights and reports (good contrast, accessible)
+    INSIGHTS_COLORS = [
+        "#0ea5e9",  # sky-500
+        "#8b5cf6",  # violet-500
+        "#10b981",  # emerald-500
+        "#f59e0b",  # amber-500
+        "#ef4444",  # red-500
+        "#06b6d4",  # cyan-500
+        "#ec4899",  # pink-500
+        "#84cc16",  # lime-500
+    ]
+    # Theme presets (insights = default for pictorial representation)
     THEMES = {
+        "insights": {
+            "template": "plotly_white",
+            "font_family": "Inter, system-ui, sans-serif",
+            "title_font_size": 18,
+            "axis_font_size": 12,
+            "colors": INSIGHTS_COLORS,
+            "paper_bg": "#fafafa",
+            "plot_bg": "#ffffff",
+            "grid_color": "#e5e7eb",
+            "title_color": "#1f2937",
+            "axis_color": "#4b5563",
+        },
         "clean": {
             "template": "plotly_white",
             "font_family": "Inter, sans-serif",
             "title_font_size": 18,
             "axis_font_size": 12,
-            "colors": px.colors.qualitative.Set2
+            "colors": INSIGHTS_COLORS,
+            "paper_bg": "#ffffff",
+            "plot_bg": "#ffffff",
         },
         "dark": {
             "template": "plotly_dark",
@@ -48,22 +73,44 @@ class VisualizationService:
         }
     }
     
+    # Default theme for all generated charts (insights-style with good colors)
+    DEFAULT_THEME = "insights"
+    
     def __init__(self):
         pass
     
-    def _apply_theme(self, fig: go.Figure, theme: str = "clean") -> go.Figure:
-        """Apply a theme preset to a figure."""
-        theme_config = self.THEMES.get(theme, self.THEMES["clean"])
+    def _apply_theme(self, fig: go.Figure, theme: Optional[str] = None) -> go.Figure:
+        """Apply a theme preset and color sequence to a figure."""
+        theme = theme or self.DEFAULT_THEME
+        theme_config = self.THEMES.get(theme, self.THEMES["insights"])
+        colors = theme_config.get("colors", self.INSIGHTS_COLORS)
         
         fig.update_layout(
-            template=theme_config["template"],
-            font_family=theme_config["font_family"],
-            title_font_size=theme_config["title_font_size"],
-            xaxis_title_font_size=theme_config["axis_font_size"],
-            yaxis_title_font_size=theme_config["axis_font_size"],
+            template=theme_config.get("template", "plotly_white"),
+            font=dict(
+                family=theme_config.get("font_family", "Inter, sans-serif"),
+                size=theme_config.get("axis_font_size", 12),
+            ),
+            title_font_size=theme_config.get("title_font_size", 18),
+            title_font_color=theme_config.get("title_color", "#1f2937"),
+            xaxis_title_font_size=theme_config.get("axis_font_size", 12),
+            yaxis_title_font_size=theme_config.get("axis_font_size", 12),
+            paper_bgcolor=theme_config.get("paper_bg", "#ffffff"),
+            plot_bgcolor=theme_config.get("plot_bg", "#ffffff"),
+            margin=dict(l=60, r=40, t=60, b=50),
         )
-        
+        if "grid_color" in theme_config:
+            fig.update_xaxes(showgrid=True, gridwidth=1, gridcolor=theme_config["grid_color"])
+            fig.update_yaxes(showgrid=True, gridwidth=1, gridcolor=theme_config["grid_color"])
+        if "axis_color" in theme_config:
+            fig.update_xaxes(tickfont_color=theme_config["axis_color"])
+            fig.update_yaxes(tickfont_color=theme_config["axis_color"])
         return fig
+    
+    def _color_sequence(self, theme: Optional[str] = None) -> List[str]:
+        """Return the color sequence for the theme (for use in color_discrete_sequence)."""
+        theme = theme or self.DEFAULT_THEME
+        return list(self.THEMES.get(theme, self.THEMES["insights"]).get("colors", self.INSIGHTS_COLORS))
     
     def _create_chart_info(
         self,
@@ -91,17 +138,18 @@ class VisualizationService:
         y: str,
         color: Optional[str] = None,
         title: Optional[str] = None,
-        theme: str = "clean"
+        theme: str = "insights"
     ) -> ChartInfo:
         """Create a line chart for time trends."""
         fig = px.line(
             df, x=x, y=y, color=color,
             title=title or f"{y} over {x}",
-            markers=True
+            markers=True,
+            color_discrete_sequence=self._color_sequence(theme)
         )
         
         fig = self._apply_theme(fig, theme)
-        fig.update_traces(line=dict(width=2))
+        fig.update_traces(line=dict(width=2.5))
         
         return self._create_chart_info(fig, "line", title or f"{y} over {x}", df[[x, y] + ([color] if color else [])])
     
@@ -113,15 +161,17 @@ class VisualizationService:
         color: Optional[str] = None,
         orientation: str = 'v',  # 'v' or 'h'
         title: Optional[str] = None,
-        theme: str = "clean"
+        theme: str = "insights"
     ) -> ChartInfo:
         """Create a bar chart."""
         if orientation == 'h':
             fig = px.bar(df, y=x, x=y, color=color, orientation='h',
-                        title=title or f"{y} by {x}")
+                        title=title or f"{y} by {x}",
+                        color_discrete_sequence=self._color_sequence(theme))
         else:
             fig = px.bar(df, x=x, y=y, color=color,
-                        title=title or f"{y} by {x}")
+                        title=title or f"{y} by {x}",
+                        color_discrete_sequence=self._color_sequence(theme))
         
         fig = self._apply_theme(fig, theme)
         
@@ -160,7 +210,8 @@ class VisualizationService:
         fig = px.histogram(
             df, x=column, nbins=bins, color=color,
             title=title or f"Distribution of {column}",
-            marginal="box"  # Add box plot above
+            marginal="box",
+            color_discrete_sequence=self._color_sequence(theme)
         )
         
         fig = self._apply_theme(fig, theme)
@@ -178,10 +229,12 @@ class VisualizationService:
         """Create a box plot for outlier visualization."""
         if group_by:
             fig = px.box(df, x=group_by, y=column,
-                        title=title or f"{column} by {group_by}")
+                        title=title or f"{column} by {group_by}",
+                        color_discrete_sequence=self._color_sequence(theme))
         else:
             fig = px.box(df, y=column,
-                        title=title or f"Box Plot of {column}")
+                        title=title or f"Box Plot of {column}",
+                        color_discrete_sequence=self._color_sequence(theme))
         
         fig = self._apply_theme(fig, theme)
         fig.update_traces(boxpoints='outliers')
@@ -197,13 +250,14 @@ class VisualizationService:
         size: Optional[str] = None,
         trendline: Optional[str] = None,  # 'ols', 'lowess'
         title: Optional[str] = None,
-        theme: str = "clean"
+        theme: str = "insights"
     ) -> ChartInfo:
         """Create a scatter plot for relationships."""
         fig = px.scatter(
             df, x=x, y=y, color=color, size=size,
             trendline=trendline,
-            title=title or f"{y} vs {x}"
+            title=title or f"{y} vs {x}",
+            color_discrete_sequence=self._color_sequence(theme)
         )
         
         fig = self._apply_theme(fig, theme)
@@ -248,7 +302,8 @@ class VisualizationService:
         """Create an area chart (cumulative)."""
         fig = px.area(
             df, x=x, y=y, color=color,
-            title=title or f"Cumulative {y}"
+            title=title or f"Cumulative {y}",
+            color_discrete_sequence=self._color_sequence(theme)
         )
         
         fig = self._apply_theme(fig, theme)
@@ -261,12 +316,13 @@ class VisualizationService:
         names: str,
         values: str,
         title: Optional[str] = None,
-        theme: str = "clean"
+        theme: str = "insights"
     ) -> ChartInfo:
         """Create a pie chart."""
         fig = px.pie(
             df, names=names, values=values,
-            title=title or f"{values} by {names}"
+            title=title or f"{values} by {names}",
+            color_discrete_sequence=self._color_sequence(theme)
         )
         
         fig = self._apply_theme(fig, theme)

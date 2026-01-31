@@ -127,6 +127,55 @@ async def send_message(
         raise HTTPException(status_code=500, detail=error_msg)
 
 
+def _resolve_chart_columns(df, x: Optional[str], y: Optional[str], chart_type: str):
+    """
+    Resolve x/y to actual DataFrame column names when LLM uses generic names (e.g. Quarter, Sales).
+    Returns (x_col, y_col) or (None, None) if resolution fails.
+    """
+    import pandas as pd
+    cols = list(df.columns)
+    if not cols:
+        return None, None
+
+    def _numeric_cols():
+        return [c for c in cols if pd.api.types.is_numeric_dtype(df[c])]
+    def _non_numeric_cols():
+        return [c for c in cols if not pd.api.types.is_numeric_dtype(df[c])]
+
+    def _best_x():
+        if x and x in cols:
+            return x
+        # Prefer columns that look like categories / dimension
+        x_keywords = ["quarter", "date", "channel", "category", "name", "region", "type", "group", "profit by sales", "channel and quarter"]
+        for kw in x_keywords:
+            for c in cols:
+                if kw in str(c).lower():
+                    return c
+        # Fallback: first non-numeric
+        non_num = _non_numeric_cols()
+        return non_num[0] if non_num else cols[0]
+
+    def _best_y():
+        if y and y in cols:
+            return y
+        y_keywords = ["sales", "total", "value", "amount", "sum", "unnamed", "revenue", "profit"]
+        for kw in y_keywords:
+            for c in cols:
+                if kw in str(c).lower():
+                    if pd.api.types.is_numeric_dtype(df[c]):
+                        return c
+        num = _numeric_cols()
+        return num[0] if num else (cols[1] if len(cols) > 1 else cols[0])
+
+    if chart_type == "histogram":
+        num = _numeric_cols()
+        x_col = (x if x in cols else None) or (y if y in cols else None) or (num[0] if num else cols[0])
+        return x_col, None
+    x_col = _best_x()
+    y_col = _best_y()
+    return x_col, y_col
+
+
 async def _generate_chart_from_spec(
     chart_spec: Dict[str, Any],
     session,
@@ -161,15 +210,23 @@ async def _generate_chart_from_spec(
         color = chart_spec.get("color")
         title = chart_spec.get("title", "Chart")
         
-        print(f"📊 Generating chart: type={chart_type}, x={x}, y={y}, title={title}")
+        # Resolve to actual column names when LLM uses generic names (Quarter, Sales, etc.)
+        x_col, y_col = _resolve_chart_columns(df, x, y, chart_type)
+        if x_col is None:
+            print(f"📊 Could not resolve chart columns for x={x}, y={y}")
+            return None
+        if chart_type != "histogram" and y_col is None:
+            y_col = x_col  # fallback for single-column
+        
+        print(f"📊 Generating chart: type={chart_type}, x={x_col}, y={y_col}, title={title}")
         print(f"📊 Available columns: {list(df.columns)}")
         
         chart_info = None
         
         # For pie charts, we need names and values columns
         if chart_type == "pie":
-            names_col = x
-            values_col = y
+            names_col = x_col
+            values_col = y_col
             if names_col and values_col and names_col in df.columns and values_col in df.columns:
                 chart_info = await visualization_service.create_pie_chart(
                     df, names_col, values_col, title
@@ -177,29 +234,29 @@ async def _generate_chart_from_spec(
             else:
                 print(f"❌ Pie chart: columns not found. Need {names_col}, {values_col}")
         elif chart_type == "line":
-            if x and y and x in df.columns and y in df.columns:
-                chart_info = await visualization_service.create_line_chart(df, x, y, color, title)
+            if x_col and y_col and x_col in df.columns and y_col in df.columns:
+                chart_info = await visualization_service.create_line_chart(df, x_col, y_col, color, title)
         elif chart_type == "bar":
-            if x and y and x in df.columns and y in df.columns:
-                chart_info = await visualization_service.create_bar_chart(df, x, y, color, title=title)
+            if x_col and y_col and x_col in df.columns and y_col in df.columns:
+                chart_info = await visualization_service.create_bar_chart(df, x_col, y_col, color, title=title)
         elif chart_type == "scatter":
-            if x and y and x in df.columns and y in df.columns:
-                chart_info = await visualization_service.create_scatter_plot(df, x, y, color, title=title)
+            if x_col and y_col and x_col in df.columns and y_col in df.columns:
+                chart_info = await visualization_service.create_scatter_plot(df, x_col, y_col, color, title=title)
         elif chart_type == "histogram":
-            col = y or x
+            col = x_col
             if col and col in df.columns:
                 chart_info = await visualization_service.create_histogram(df, col, title=title)
         elif chart_type == "box":
-            col = y or x
+            col = y_col or x_col
             if col and col in df.columns:
                 chart_info = await visualization_service.create_box_plot(df, col, color, title)
         elif chart_type == "area":
-            if x and y and x in df.columns and y in df.columns:
-                chart_info = await visualization_service.create_area_chart(df, x, y, color, title)
+            if x_col and y_col and x_col in df.columns and y_col in df.columns:
+                chart_info = await visualization_service.create_area_chart(df, x_col, y_col, color, title)
         else:
             # Default to bar
-            if x and y and x in df.columns and y in df.columns:
-                chart_info = await visualization_service.create_bar_chart(df, x, y, color, title=title)
+            if x_col and y_col and x_col in df.columns and y_col in df.columns:
+                chart_info = await visualization_service.create_bar_chart(df, x_col, y_col, color, title=title)
         
         if chart_info is None:
             print(f"❌ Chart generation failed - columns not found or invalid spec")

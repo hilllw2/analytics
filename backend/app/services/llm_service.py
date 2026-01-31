@@ -127,11 +127,10 @@ CATEGORICAL COLUMNS (for grouping): {ds.categorical_columns if ds.categorical_co
 USER QUESTION: {query}
 
 CRITICAL RULES:
-1. ONLY use column names that EXIST in the dataset (listed above)
-2. DO NOT make up or assume columns that don't exist
-3. The dataframe variable is 'df'
-4. Store your final result in a variable called 'result'
-5. For charts, use columns from your 'result' dataframe (the output of your code)
+1. ONLY use column names that EXIST in the dataset (listed above). Use the EXACT names, e.g. if a column is "Channel and Quarter" or "Unnamed: 4", use that exact string.
+2. DO NOT make up or assume columns (e.g. do not use "Quarter" or "Sales" unless those are the actual column names in the data).
+3. The dataframe variable is 'df'. Store your final result in a variable called 'result'.
+4. For chart_spec: x and y MUST be the EXACT column names from your 'result' dataframe. After your code runs, result will have specific columns - use those exact names in chart_spec. For pivot-style data, the first column might be the category (e.g. "Channel and Quarter") and a numeric column might be "Unnamed: 4" or similar - use those exact names.
 
 RESPONSE FORMAT - Return ONLY this JSON (no markdown, no extra text):
 {{
@@ -139,8 +138,8 @@ RESPONSE FORMAT - Return ONLY this JSON (no markdown, no extra text):
     "code": "Python pandas code using df, result must be a DataFrame or Series. Example: result = df.groupby('Column1')['Column2'].sum().reset_index()",
     "chart_spec": {{
         "type": "bar|line|pie|scatter|histogram|box",
-        "x": "column from result dataframe",
-        "y": "column from result dataframe", 
+        "x": "EXACT column name from result (e.g. first column or category column)",
+        "y": "EXACT column name from result (e.g. numeric/sum column)",
         "title": "Descriptive title"
     }},
     "methodology": "How you approached this analysis"

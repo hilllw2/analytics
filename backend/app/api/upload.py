@@ -582,6 +582,9 @@ async def generate_quick_chart(
     if color_column:
         validate_col(color_column, required=False)
     
+    # Insights-style color palette (matches visualization service)
+    insights_colors = ["#0ea5e9", "#8b5cf6", "#10b981", "#f59e0b", "#ef4444", "#06b6d4", "#ec4899", "#84cc16"]
+    
     try:
         fig = None
         chart_title = title or f"{chart_type.capitalize()} Chart"
@@ -595,14 +598,14 @@ async def generate_quick_chart(
                 if color_column:
                     group_cols.append(color_column)
                 agg_df = df.groupby(group_cols, dropna=False)[y_column].agg(agg_func).reset_index()
-                fig = px.bar(agg_df, x=x_column, y=y_column, color=color_column if color_column else None, title=chart_title)
+                fig = px.bar(agg_df, x=x_column, y=y_column, color=color_column if color_column else None, title=chart_title, color_discrete_sequence=insights_colors)
             else:
                 raise HTTPException(status_code=400, detail="Bar chart requires x and y columns")
                 
         elif chart_type == "line":
             if x_column and y_column:
                 df[y_column] = ensure_numeric(df[y_column])
-                line_kw = {"x": x_column, "y": y_column, "title": chart_title}
+                line_kw = {"x": x_column, "y": y_column, "title": chart_title, "color_discrete_sequence": insights_colors}
                 if color_column:
                     line_kw["color"] = color_column
                 fig = px.line(df, **line_kw)
@@ -613,7 +616,7 @@ async def generate_quick_chart(
             if x_column and y_column:
                 df[y_column] = ensure_numeric(df[y_column])
                 agg_df = df.groupby(x_column, dropna=False)[y_column].agg(agg_func).reset_index()
-                fig = px.pie(agg_df, names=x_column, values=y_column, title=chart_title)
+                fig = px.pie(agg_df, names=x_column, values=y_column, title=chart_title, color_discrete_sequence=insights_colors)
             else:
                 raise HTTPException(status_code=400, detail="Pie chart requires names (x) and values (y) columns")
                 
@@ -621,7 +624,7 @@ async def generate_quick_chart(
             if x_column and y_column:
                 df[x_column] = ensure_numeric(df[x_column])
                 df[y_column] = ensure_numeric(df[y_column])
-                scatter_kw = {"x": x_column, "y": y_column, "title": chart_title}
+                scatter_kw = {"x": x_column, "y": y_column, "title": chart_title, "color_discrete_sequence": insights_colors}
                 if color_column:
                     scatter_kw["color"] = color_column
                 fig = px.scatter(df, **scatter_kw)
@@ -632,7 +635,7 @@ async def generate_quick_chart(
             col = x_column or y_column
             if col:
                 df[col] = ensure_numeric(df[col])
-                hist_kw = {"x": col, "title": chart_title}
+                hist_kw = {"x": col, "title": chart_title, "color_discrete_sequence": insights_colors}
                 if color_column:
                     hist_kw["color"] = color_column
                 fig = px.histogram(df.dropna(subset=[col]), **hist_kw)
@@ -643,7 +646,7 @@ async def generate_quick_chart(
             col = y_column or x_column
             if col:
                 df[col] = ensure_numeric(df[col])
-                box_kw = {"y": col, "title": chart_title}
+                box_kw = {"y": col, "title": chart_title, "color_discrete_sequence": insights_colors}
                 if color_column:
                     box_kw["x"] = color_column
                 fig = px.box(df.dropna(subset=[col]), **box_kw)
@@ -657,8 +660,10 @@ async def generate_quick_chart(
         
         fig.update_layout(
             template="plotly_white",
-            font=dict(family="Inter, sans-serif"),
-            margin=dict(l=50, r=30, t=50, b=50)
+            font=dict(family="Inter, system-ui, sans-serif", size=12),
+            margin=dict(l=60, r=40, t=60, b=50),
+            paper_bgcolor="#fafafa",
+            plot_bgcolor="#ffffff"
         )
         
         # Use to_json() + json.loads() so the result is JSON-serializable (no numpy types)
