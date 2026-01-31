@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { 
   Upload, 
   FileSpreadsheet, 
@@ -9,13 +10,15 @@ import {
   Target
 } from 'lucide-react';
 import { useStore } from '../store/useStore';
+import { api } from '../services/api';
 
 interface SidebarProps {
   onUpload: () => void;
 }
 
 export function Sidebar({ onUpload }: SidebarProps) {
-  const { activeDataset, datasets } = useStore();
+  const { activeDataset, datasets, setActiveDataset, setPreviewData } = useStore();
+  const [switching, setSwitching] = useState(false);
 
   const quickActions = [
     { icon: TrendingUp, label: 'KPI Analysis', query: 'Show me the key metrics' },
@@ -45,22 +48,38 @@ export function Sidebar({ onUpload }: SidebarProps) {
         ) : (
           <div className="space-y-1">
             {datasets.map((ds) => (
-              <div
+              <button
                 key={ds.name}
-                className={`p-2 rounded-lg flex items-center gap-2 cursor-pointer transition-colors ${
+                type="button"
+                onClick={async () => {
+                  if (activeDataset?.name === ds.name) return;
+                  setActiveDataset(ds);
+                  setSwitching(true);
+                  try {
+                    await api.setActiveDataset(ds.name);
+                    const preview = await api.getPreview({ limit: 100 });
+                    setPreviewData(preview.rows || []);
+                  } catch {
+                    // keep UI in sync
+                  } finally {
+                    setSwitching(false);
+                  }
+                }}
+                disabled={switching}
+                className={`w-full p-2 rounded-lg flex items-center gap-2 text-left transition-colors ${
                   activeDataset?.name === ds.name
                     ? 'bg-primary-50 text-primary-700'
                     : 'hover:bg-gray-50'
                 }`}
               >
-                <FileSpreadsheet className="w-4 h-4" />
+                <FileSpreadsheet className="w-4 h-4 flex-shrink-0" />
                 <div className="flex-1 min-w-0">
                   <p className="text-sm font-medium truncate">{ds.name}</p>
                   <p className="text-xs text-gray-500">
                     {ds.rowCount.toLocaleString()} rows
                   </p>
                 </div>
-              </div>
+              </button>
             ))}
           </div>
         )}

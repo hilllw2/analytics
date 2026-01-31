@@ -3,7 +3,7 @@ Upload API Routes
 Handles file upload, parsing, and data ingestion.
 """
 
-from fastapi import APIRouter, UploadFile, File, HTTPException, Header, Query
+from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Header, Query
 from fastapi.responses import JSONResponse
 from typing import Optional, List, Any
 import pandas as pd
@@ -147,11 +147,12 @@ async def upload_file(
 
 
 @router.get("/excel-sheets")
+@router.post("/excel-sheets")
 async def get_excel_sheets(
     file: UploadFile = File(...),
 ):
     """
-    Get list of sheets in an Excel file.
+    Get list of sheets in an Excel file. Use POST when sending file in body.
     """
     content = await file.read()
     
@@ -160,6 +161,95 @@ async def get_excel_sheets(
         return {"sheets": sheets}
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Failed to read Excel file: {str(e)}")
+
+
+@router.post("/file-excel-multi")
+async def upload_excel_multi_sheets(
+    file: UploadFile = File(...),
+    sheet_names: str = Form(..., description='JSON array of sheet names, e.g. ["Sheet1", "Sheet2"]'),
+    session_id: Optional[str] = Header(None, alias="X-Session-ID"),
+    sample_mode: bool = Query(False),
+    max_rows: Optional[int] = Query(None),
+):
+    """
+    Upload an Excel file and load multiple sheets as separate datasets (tabs).
+    Each sheet becomes a dataset named "FileName - SheetName".
+    """
+    import json
+    allowed = {'.xlsx', '.xls'}
+    ext = '.' + file.filename.rsplit('.', 1)[-1].lower() if '.' in file.filename else ''
+    if ext not in allowed:
+        raise HTTPException(status_code=400, detail="Only .xlsx and .xls files are supported for multi-sheet upload")
+    
+    try:
+        names_list = json.loads(sheet_names)
+        if not names_list or not isinstance(names_list, list):
+            raise HTTPException(status_code=400, detail="sheet_names must be a non-empty JSON array of strings")
+    except json.JSONDecodeError as e:
+        raise HTTPException(status_code=400, detail=f"Invalid sheet_names JSON: {e}")
+    
+    content = await file.read()
+    base_name = file.filename.rsplit('.', 1)[0]
+    
+    if session_id:
+        session = session_manager.get_session(session_id)
+        if not session:
+            session = session_manager.create_session()
+    else:
+        session = session_manager.create_session()
+    
+    datasets_out = []
+    first_preview = None
+    first_name = None
+    
+    for sheet_name in names_list:
+        if not isinstance(sheet_name, str):
+            continue
+        try:
+            df, metadata = await data_ingestion.load_file(
+                content=content,
+                filename=file.filename,
+                sheet_name=sheet_name,
+                sample_mode=sample_mode,
+                max_rows=max_rows,
+            )
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Failed to load sheet '{sheet_name}': {str(e)}")
+        
+        dataset_name = f"{base_name} - {sheet_name}"
+        dataset_info = data_ingestion.create_dataset_info(dataset_name, df, metadata)
+        session.datasets[dataset_name] = dataset_info
+        
+        preview_df = df.head(settings.PREVIEW_ROWS)
+        preview_data = serialize_dataframe_rows(preview_df)
+        
+        datasets_out.append({
+            "name": dataset_name,
+            "filename": file.filename,
+            "sheet_name": sheet_name,
+            "row_count": dataset_info.row_count,
+            "column_count": dataset_info.column_count,
+            "columns": list(df.columns),
+            "inferred_types": metadata.get("inferred_types", {}),
+            "date_columns": metadata.get("date_columns", []),
+            "numeric_columns": metadata.get("numeric_columns", []),
+            "categorical_columns": metadata.get("categorical_columns", []),
+            "is_sampled": metadata.get("is_sampled", False),
+            "full_row_count": metadata.get("full_row_count"),
+        })
+        
+        if first_preview is None:
+            first_name = dataset_name
+            session.active_dataset_name = dataset_name
+            first_preview = {"rows": preview_data, "row_count": len(preview_data)}
+    
+    return JSONResponse({
+        "success": True,
+        "session_id": session.id,
+        "datasets": datasets_out,
+        "active_dataset_name": first_name,
+        "preview": first_preview,
+    })
 
 
 @router.post("/load-full")

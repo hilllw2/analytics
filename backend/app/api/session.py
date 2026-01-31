@@ -3,9 +3,10 @@ Session API Routes
 Manage ephemeral sessions.
 """
 
-from fastapi import APIRouter, HTTPException, Header
+from fastapi import APIRouter, HTTPException, Header, Body
 from fastapi.responses import JSONResponse
 from typing import Optional
+from pydantic import BaseModel
 
 from app.core.session_manager import session_manager
 from app.core.config import settings
@@ -42,6 +43,30 @@ async def get_session_info(
         raise HTTPException(status_code=404, detail="Session not found or expired")
     
     return info
+
+
+class SetActiveDatasetRequest(BaseModel):
+    dataset_name: str
+
+
+@router.post("/set-active-dataset")
+async def set_active_dataset(
+    session_id: str = Header(..., alias="X-Session-ID"),
+    body: SetActiveDatasetRequest = Body(...),
+):
+    """
+    Set the active dataset (sheet/tab) for this session. Profile, chat, and charts use the active dataset.
+    """
+    session = session_manager.get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found or expired")
+    if body.dataset_name not in session.datasets:
+        raise HTTPException(status_code=404, detail=f"Dataset '{body.dataset_name}' not found")
+    session.active_dataset_name = body.dataset_name
+    return {
+        "success": True,
+        "active_dataset_name": body.dataset_name,
+    }
 
 
 @router.post("/touch")

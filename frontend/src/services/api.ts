@@ -75,11 +75,30 @@ class ApiService {
   async getExcelSheets(file: File) {
     const formData = new FormData();
     formData.append('file', file);
-
-    const response = await this.client.get('/upload/excel-sheets', {
-      data: formData,
+    const response = await this.client.post('/upload/excel-sheets', formData, {
       headers: { 'Content-Type': 'multipart/form-data' },
     });
+    return response.data;
+  }
+
+  async uploadExcelMulti(file: File, sheetNames: string[], options?: { sampleMode?: boolean; maxRows?: number }) {
+    const formData = new FormData();
+    formData.append('file', file);
+    formData.append('sheet_names', JSON.stringify(sheetNames));
+    const params = new URLSearchParams();
+    if (options?.sampleMode) params.append('sample_mode', 'true');
+    if (options?.maxRows) params.append('max_rows', String(options.maxRows));
+    const response = await this.client.post(`/upload/file-excel-multi?${params.toString()}`, formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    });
+    if (response.data.session_id && !this.sessionId) {
+      this.sessionId = response.data.session_id;
+    }
+    return response.data;
+  }
+
+  async setActiveDataset(datasetName: string) {
+    const response = await this.client.post('/session/set-active-dataset', { dataset_name: datasetName });
     return response.data;
   }
 

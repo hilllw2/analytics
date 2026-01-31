@@ -1,11 +1,22 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import { useDropzone } from 'react-dropzone';
-import { X, Upload, FileSpreadsheet, AlertCircle, Check } from 'lucide-react';
+import { X, Upload, FileSpreadsheet, AlertCircle, Check, Layers } from 'lucide-react';
 import { useStore } from '../store/useStore';
 import { api } from '../services/api';
 
 interface UploadModalProps {
   onClose: () => void;
+}
+
+function isExcelFile(file: File): boolean {
+  const ext = file.name.split('.').pop()?.toLowerCase();
+  return ext === 'xlsx' || ext === 'xls';
+}
+
+interface SheetInfo {
+  name: string;
+  row_count: number;
+  column_count?: number;
 }
 
 export function UploadModal({ onClose }: UploadModalProps) {
@@ -14,6 +25,9 @@ export function UploadModal({ onClose }: UploadModalProps) {
   const [file, setFile] = useState<File | null>(null);
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [sheets, setSheets] = useState<SheetInfo[] | null>(null);
+  const [loadingSheets, setLoadingSheets] = useState(false);
+  const [selectedSheets, setSelectedSheets] = useState<Set<string>>(new Set());
   const [options, setOptions] = useState({
     sampleMode: false,
     maxRows: undefined as number | undefined,
@@ -23,8 +37,29 @@ export function UploadModal({ onClose }: UploadModalProps) {
     if (acceptedFiles.length > 0) {
       setFile(acceptedFiles[0]);
       setError(null);
+      setSheets(null);
+      setSelectedSheets(new Set());
     }
   }, []);
+
+  useEffect(() => {
+    if (!file || !isExcelFile(file)) return;
+    let cancelled = false;
+    setLoadingSheets(true);
+    api.getExcelSheets(file)
+      .then((data: { sheets: SheetInfo[] }) => {
+        if (cancelled) return;
+        setSheets(data.sheets || []);
+        setSelectedSheets(new Set((data.sheets || []).map((s: SheetInfo) => s.name)));
+      })
+      .catch(() => {
+        if (!cancelled) setSheets([]);
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingSheets(false);
+      });
+    return () => { cancelled = true; };
+  }, [file]);
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     onDrop,
@@ -38,37 +73,70 @@ export function UploadModal({ onClose }: UploadModalProps) {
     maxSize: 500 * 1024 * 1024, // 500MB
   });
 
+  const toggleSheet = (name: string) => {
+    setSelectedSheets((prev) => {
+      const next = new Set(prev);
+      if (next.has(name)) next.delete(name);
+      else next.add(name);
+      return next;
+    });
+  };
+
+  const selectAllSheets = () => {
+    if (!sheets) return;
+    setSelectedSheets(new Set(sheets.map((s) => s.name)));
+  };
+
   const handleUpload = async () => {
     if (!file) return;
+
+    const isExcel = isExcelFile(file);
+    const useMultiSheet = isExcel && sheets && sheets.length > 0 && selectedSheets.size > 0;
 
     setUploading(true);
     setError(null);
 
     try {
-      const result = await api.uploadFile(file, options);
-      
-      if (result.session_id) {
-        setSessionId(result.session_id);
+      if (useMultiSheet) {
+        const result = await api.uploadExcelMulti(file, Array.from(selectedSheets), options);
+        if (result.session_id) setSessionId(result.session_id);
+        const datasets = (result.datasets || []).map((d: any) => ({
+          name: d.name,
+          filename: d.filename,
+          rowCount: d.row_count,
+          columnCount: d.column_count,
+          columns: d.columns,
+          inferredTypes: d.inferred_types || {},
+          dateColumns: d.date_columns || [],
+          numericColumns: d.numeric_columns || [],
+          categoricalColumns: d.categorical_columns || [],
+          isSampled: d.is_sampled,
+          fullRowCount: d.full_row_count,
+        }));
+        setDatasets(datasets);
+        const first = datasets.find((d) => d.name === result.active_dataset_name) || datasets[0];
+        setActiveDataset(first || null);
+        setPreviewData(result.preview?.rows || []);
+      } else {
+        const result = await api.uploadFile(file, options);
+        if (result.session_id) setSessionId(result.session_id);
+        const dataset = {
+          name: result.dataset.name,
+          filename: result.dataset.filename,
+          rowCount: result.dataset.row_count,
+          columnCount: result.dataset.column_count,
+          columns: result.dataset.columns,
+          inferredTypes: result.dataset.inferred_types,
+          dateColumns: result.dataset.date_columns,
+          numericColumns: result.dataset.numeric_columns,
+          categoricalColumns: result.dataset.categorical_columns,
+          isSampled: result.dataset.is_sampled,
+          fullRowCount: result.dataset.full_row_count,
+        };
+        setDatasets([dataset]);
+        setActiveDataset(dataset);
+        setPreviewData(result.preview?.rows || []);
       }
-
-      const dataset = {
-        name: result.dataset.name,
-        filename: result.dataset.filename,
-        rowCount: result.dataset.row_count,
-        columnCount: result.dataset.column_count,
-        columns: result.dataset.columns,
-        inferredTypes: result.dataset.inferred_types,
-        dateColumns: result.dataset.date_columns,
-        numericColumns: result.dataset.numeric_columns,
-        categoricalColumns: result.dataset.categorical_columns,
-        isSampled: result.dataset.is_sampled,
-        fullRowCount: result.dataset.full_row_count,
-      };
-
-      setDatasets([dataset]);
-      setActiveDataset(dataset);
-      setPreviewData(result.preview.rows);
-      
       onClose();
     } catch (err: any) {
       setError(err.response?.data?.detail || err.message || 'Upload failed');
@@ -141,6 +209,49 @@ export function UploadModal({ onClose }: UploadModalProps) {
             Supports CSV, TSV, XLSX, XLS • Max 500MB
           </p>
 
+          {/* Excel: sheet picker (tabs) */}
+          {file && isExcelFile(file) && (
+            <div className="mt-4 p-3 bg-gray-50 rounded-lg">
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-sm font-medium text-gray-700 flex items-center gap-1">
+                  <Layers className="w-4 h-4" />
+                  Sheets (tabs) to load
+                </span>
+                {sheets && sheets.length > 1 && (
+                  <button
+                    type="button"
+                    onClick={selectAllSheets}
+                    className="text-xs text-primary-600 hover:underline"
+                  >
+                    Select all
+                  </button>
+                )}
+              </div>
+              {loadingSheets ? (
+                <p className="text-sm text-gray-500">Loading sheet list...</p>
+              ) : sheets && sheets.length > 0 ? (
+                <div className="max-h-32 overflow-y-auto space-y-1">
+                  {sheets.map((sheet) => (
+                    <label key={sheet.name} className="flex items-center gap-2 py-1 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={selectedSheets.has(sheet.name)}
+                        onChange={() => toggleSheet(sheet.name)}
+                        className="w-4 h-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+                      />
+                      <span className="text-sm text-gray-800 truncate">{sheet.name}</span>
+                      {sheet.row_count != null && (
+                        <span className="text-xs text-gray-500">({sheet.row_count.toLocaleString()} rows)</span>
+                      )}
+                    </label>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-sm text-gray-500">No sheets found or not an Excel file.</p>
+              )}
+            </div>
+          )}
+
           {/* Options */}
           {file && (
             <div className="mt-4 space-y-3">
@@ -177,7 +288,11 @@ export function UploadModal({ onClose }: UploadModalProps) {
           </button>
           <button
             onClick={handleUpload}
-            disabled={!file || uploading}
+            disabled={
+              !file ||
+              uploading ||
+              (file && isExcelFile(file) && (loadingSheets || selectedSheets.size === 0))
+            }
             className="btn btn-primary"
           >
             {uploading ? (
