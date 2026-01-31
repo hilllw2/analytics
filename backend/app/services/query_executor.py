@@ -18,17 +18,23 @@ from app.core.config import settings
 
 
 def make_serializable(obj: Any) -> Any:
-    """Convert any object to JSON-serializable format."""
+    """Convert to JSON-serializable format; preserve inf/NaN as strings so data is not lost."""
     if obj is None:
         return None
-    if isinstance(obj, (str, int, float, bool)):
+    if isinstance(obj, (str, int, bool)):
         return obj
+    if isinstance(obj, (float, np.floating)):
+        if np.isnan(obj):
+            return "NaN"
+        if np.isposinf(obj):
+            return "Infinity"
+        if np.isneginf(obj):
+            return "-Infinity"
+        return float(obj)
     if isinstance(obj, (datetime, date, pd.Timestamp)):
         return obj.isoformat() if pd.notna(obj) else None
     if isinstance(obj, (np.integer,)):
         return int(obj)
-    if isinstance(obj, (np.floating,)):
-        return float(obj) if not np.isnan(obj) else None
     if isinstance(obj, np.bool_):
         return bool(obj)
     if isinstance(obj, (np.ndarray,)):
@@ -36,7 +42,7 @@ def make_serializable(obj: Any) -> Any:
     if isinstance(obj, pd.Period):
         return str(obj)
     if pd.isna(obj):
-        return None
+        return "NaN"
     return str(obj)
 
 
@@ -322,7 +328,7 @@ class QueryExecutor:
         
         if isinstance(result, (int, float, np.integer, np.floating)):
             return {
-                "data": float(result) if not np.isnan(result) else None,
+                "data": make_serializable(result),
                 "display_type": "number"
             }
         

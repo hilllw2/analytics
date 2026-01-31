@@ -21,21 +21,29 @@ router = APIRouter()
 
 
 def make_json_serializable(obj: Any) -> Any:
-    """Convert any object to JSON-serializable format."""
-    if obj is None or isinstance(obj, (str, int, float, bool)):
+    """Convert to JSON-serializable format; preserve inf/NaN as strings so data is not lost."""
+    if obj is None:
+        return None
+    if isinstance(obj, (str, int, bool)):
         return obj
+    if isinstance(obj, (float, np.floating)):
+        if np.isnan(obj):
+            return "NaN"
+        if np.isposinf(obj):
+            return "Infinity"
+        if np.isneginf(obj):
+            return "-Infinity"
+        return float(obj)
     if isinstance(obj, (datetime, date, pd.Timestamp)):
         return obj.isoformat() if pd.notna(obj) else None
     if isinstance(obj, (np.integer,)):
         return int(obj)
-    if isinstance(obj, (np.floating,)):
-        return float(obj) if not np.isnan(obj) else None
     if isinstance(obj, np.bool_):
         return bool(obj)
     if isinstance(obj, (np.ndarray,)):
-        return obj.tolist()
+        return [make_json_serializable(x) for x in obj.tolist()]
     if pd.isna(obj):
-        return None
+        return "NaN"
     return str(obj)
 
 
