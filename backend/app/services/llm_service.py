@@ -1,6 +1,7 @@
 """
 LLM Service
-Integrates with Google Gemini 2.5 Flash for natural language processing.
+Two-agent flow: Agent 1 (analysis/insights) -> Agent 2 (code/chart).
+Integrates with Google Gemini for natural language processing.
 """
 
 import google.generativeai as genai
@@ -15,7 +16,9 @@ from app.core.session_manager import Session, DatasetInfo
 
 class LLMService:
     """
-    Service for LLM-powered natural language understanding and code generation.
+    Two-agent service:
+    - Agent 1: Generates insights, summary, and data overview (no code).
+    - Agent 2: Generates code and chart_spec using Agent 1 output and exact column names.
     """
     
     def __init__(self):
@@ -33,6 +36,22 @@ class LLMService:
             except Exception as e:
                 print(f"❌ LLM initialization failed: {e}")
                 self.model = None
+    
+    def _build_data_overview(self, session: Session) -> str:
+        """Build a short df.info()-style overview for the code agent."""
+        if not session.active_dataset:
+            return "No dataset loaded."
+        ds = session.active_dataset
+        df = ds.df
+        lines = [
+            f"Shape: {df.shape[0]} rows, {df.shape[1]} columns",
+            "Columns (exact names to use in code):",
+            ", ".join(f'"{c}"' for c in df.columns),
+            "",
+            "Dtypes: " + ", ".join(f"{c}: {df[c].dtype}" for c in df.columns[:15])
+            + ("..." if len(df.columns) > 15 else ""),
+        ]
+        return "\n".join(lines)
     
     def _build_context(self, session: Session) -> str:
         """Build comprehensive context about the dataset."""
@@ -98,6 +117,101 @@ CATEGORICAL COLUMNS (for grouping): {ds.categorical_columns if ds.categorical_co
 """
         return context
     
+    def _agent_analysis(self, query: str, context: str) -> Dict[str, Any]:
+        """
+        Agent 1: Generate insights and summary only. No code.
+        Returns: { "insights": str, "summary": str, "data_overview": str }
+        """
+        prompt = f"""You are a data analyst. Your job is ONLY to analyze the dataset and produce insights and a summary. Do NOT generate any code.
+
+{context}
+
+USER REQUEST: {query}
+
+Output ONLY valid JSON with these exact keys (no markdown, no code blocks, no extra text):
+{{
+    "insights": "2-4 bullet points in plain English about what the data shows and what the user might want to see. Use exact column names from the dataset.",
+    "summary": "One short paragraph summarizing the dataset and how it relates to the user's question.",
+    "data_overview": "One line: row count, column names (list them), and which columns are numeric/categorical."
+}}
+
+Return only the JSON object, nothing else."""
+
+        resp = self.model.generate_content(prompt)
+        text = resp.text.strip()
+        parsed = self._parse_json_only(text)
+        return {
+            "insights": parsed.get("insights", ""),
+            "summary": parsed.get("summary", ""),
+            "data_overview": parsed.get("data_overview", ""),
+        }
+
+    def _agent_code(
+        self,
+        query: str,
+        agent1_output: Dict[str, Any],
+        column_names: List[str],
+        data_overview: str,
+    ) -> Dict[str, Any]:
+        """
+        Agent 2: Generate only code and chart_spec. Uses Agent 1 output and exact column names.
+        Returns: { "code": str, "chart_spec": dict }
+        """
+        insights = agent1_output.get("insights", "")
+        summary = agent1_output.get("summary", "")
+        cols_str = ", ".join(f'"{c}"' for c in column_names)
+
+        prompt = f"""You are a code generator. You receive the user's question, an analysis summary from another agent, and the EXACT column names. Your job is ONLY to output JSON with "code" and "chart_spec". No explanations.
+
+USER REQUEST: {query}
+
+ANALYSIS FROM PREVIOUS AGENT (for context only):
+Insights: {insights}
+Summary: {summary}
+
+DATA OVERVIEW:
+{data_overview}
+
+EXACT COLUMN NAMES (use these and only these in your code): {cols_str}
+
+RULES:
+1. The dataframe variable is "df". Your final result must be in a variable named "result" (DataFrame or Series).
+2. Use ONLY the column names listed above. If a column is "Total Revenue" or "Sales Rep", use that exact string.
+3. For chart_spec use EXACT column names that will exist in "result" after your code runs (e.g. if you groupby and reset_index, use the resulting column names).
+4. chart_spec: {{ "type": "bar|line|pie|scatter|histogram|box", "x": "exact column name", "y": "exact column name", "title": "Chart title" }}
+
+Output ONLY valid JSON (no markdown, no ```):
+{{
+    "code": "Python pandas code. Example: result = df.groupby('Col1')['Col2'].sum().reset_index()",
+    "chart_spec": {{ "type": "bar", "x": "Col1", "y": "Col2", "title": "Title" }}
+}}"""
+
+        resp = self.model.generate_content(prompt)
+        text = resp.text.strip()
+        parsed = self._parse_json_only(text)
+        return {
+            "code": parsed.get("code"),
+            "chart_spec": parsed.get("chart_spec"),
+        }
+
+    def _parse_json_only(self, text: str) -> Dict[str, Any]:
+        """Parse JSON from LLM output; never return raw text as content."""
+        text = text.strip()
+        if text.startswith("```"):
+            text = re.sub(r'^```(?:json)?\s*', '', text)
+            text = re.sub(r'\s*```$', '', text)
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError:
+            pass
+        match = re.search(r'\{[\s\S]*\}', text)
+        if match:
+            try:
+                return json.loads(match.group())
+            except json.JSONDecodeError:
+                pass
+        return {}
+
     async def process_query(
         self,
         query: str,
@@ -105,9 +219,12 @@ CATEGORICAL COLUMNS (for grouping): {ds.categorical_columns if ds.categorical_co
         regenerate: bool = False,
         style: Optional[str] = None
     ) -> Dict[str, Any]:
-        """Process a natural language query."""
+        """
+        Two-agent flow: Agent 1 (insights/summary) -> Agent 2 (code/chart).
+        Returns only formatted insights for display; code and chart_spec for execution.
+        """
         self._ensure_initialized()
-        
+
         if not self.model:
             return {
                 "type": "error",
@@ -115,114 +232,68 @@ CATEGORICAL COLUMNS (for grouping): {ds.categorical_columns if ds.categorical_co
                 "code": None,
                 "chart_spec": None,
                 "methodology": None,
-                "warnings": ["LLM service not available"]
+                "warnings": ["LLM service not available"],
             }
-        
+
         context = self._build_context(session)
-        
-        prompt = f"""You are a data analyst assistant. Analyze the user's data and answer their question.
-
-{context}
-
-USER QUESTION: {query}
-
-CRITICAL RULES:
-1. ONLY use column names that EXIST in the dataset (listed above). Use the EXACT names, e.g. if a column is "Channel and Quarter" or "Unnamed: 4", use that exact string.
-2. DO NOT make up or assume columns (e.g. do not use "Quarter" or "Sales" unless those are the actual column names in the data).
-3. The dataframe variable is 'df'. Store your final result in a variable called 'result'.
-4. For chart_spec: x and y MUST be the EXACT column names from your 'result' dataframe. After your code runs, result will have specific columns - use those exact names in chart_spec. For pivot-style data, the first column might be the category (e.g. "Channel and Quarter") and a numeric column might be "Unnamed: 4" or similar - use those exact names.
-
-RESPONSE FORMAT - Return ONLY this JSON (no markdown, no extra text):
-{{
-    "response": "Clear explanation of findings in plain English",
-    "code": "Python pandas code using df, result must be a DataFrame or Series. Example: result = df.groupby('Column1')['Column2'].sum().reset_index()",
-    "chart_spec": {{
-        "type": "bar|line|pie|scatter|histogram|box",
-        "x": "EXACT column name from result (e.g. first column or category column)",
-        "y": "EXACT column name from result (e.g. numeric/sum column)",
-        "title": "Descriptive title"
-    }},
-    "methodology": "How you approached this analysis"
-}}
-
-EXAMPLES:
-- If user asks "show sales by region": 
-  code: result = df.groupby('Region')['Sales'].sum().reset_index()
-  chart_spec: {{"type": "bar", "x": "Region", "y": "Sales", "title": "Sales by Region"}}
-
-- If user asks "distribution of prices":
-  code: result = df[['Price']].dropna()
-  chart_spec: {{"type": "histogram", "x": "Price", "y": null, "title": "Price Distribution"}}
-
-- If user asks "trend over time":
-  code: result = df.groupby('Date')['Amount'].sum().reset_index()
-  chart_spec: {{"type": "line", "x": "Date", "y": "Amount", "title": "Amount Over Time"}}
-
-Now analyze the user's question and respond with valid JSON only:"""
+        data_overview = self._build_data_overview(session)
+        column_names = list(session.active_dataset.df.columns) if session.active_dataset else []
 
         try:
-            response = self.model.generate_content(prompt)
-            response_text = response.text.strip()
-            
-            print(f"📝 LLM Raw Response: {response_text[:500]}...")
-            
-            # Parse the response
-            parsed = self._parse_response(response_text)
-            
+            # Agent 1: insights and summary only (never shown as raw JSON)
+            agent1 = self._agent_analysis(query, context)
+            insights = (agent1.get("insights") or "").strip()
+            summary = (agent1.get("summary") or "").strip()
+            # Build the text we show in chat (insights + summary only)
+            response_parts = []
+            if insights:
+                response_parts.append(insights)
+            if summary:
+                response_parts.append(summary)
+            display_response = "\n\n".join(response_parts) if response_parts else "Analysis complete."
+
+            # Agent 2: code and chart_spec using Agent 1 output
+            agent2 = self._agent_code(query, agent1, column_names, data_overview)
+            code = agent2.get("code")
+            chart_spec = agent2.get("chart_spec")
+
             return {
                 "type": "text",
-                "response": parsed.get("response", "Analysis complete."),
-                "code": parsed.get("code"),
-                "chart_spec": parsed.get("chart_spec"),
-                "methodology": parsed.get("methodology"),
-                "warnings": []
+                "response": display_response,
+                "code": code,
+                "chart_spec": chart_spec,
+                "methodology": None,
+                "warnings": [],
             }
-            
         except Exception as e:
-            error_msg = f"LLM Error: {str(e)}"
-            print(f"❌ {error_msg}")
+            error_msg = str(e)
+            print(f"❌ LLM Error: {error_msg}")
             traceback.print_exc()
             return {
                 "type": "error",
-                "response": error_msg,
+                "response": f"Error: {error_msg}",
                 "code": None,
                 "chart_spec": None,
                 "methodology": None,
-                "warnings": [error_msg]
+                "warnings": [error_msg],
             }
-    
+
     def _parse_response(self, text: str) -> Dict[str, Any]:
-        """Parse LLM response, handling various formats."""
-        # Clean up the text
-        text = text.strip()
-        
-        # Remove markdown code blocks if present
-        if text.startswith("```"):
-            # Remove ```json or ``` at start
-            text = re.sub(r'^```(?:json)?\s*', '', text)
-            # Remove ``` at end
-            text = re.sub(r'\s*```$', '', text)
-        
-        # Try to parse as JSON
-        try:
-            return json.loads(text)
-        except json.JSONDecodeError:
-            pass
-        
-        # Try to find JSON object in the text
-        json_match = re.search(r'\{[\s\S]*\}', text)
-        if json_match:
-            try:
-                return json.loads(json_match.group())
-            except json.JSONDecodeError:
-                pass
-        
-        # Fallback: return the text as response
+        """Parse LLM response; avoid ever returning raw JSON as the displayed response."""
+        parsed = self._parse_json_only(text)
+        if parsed:
+            # Ensure we never send raw JSON to the user
+            resp_text = parsed.get("response") or parsed.get("insights") or parsed.get("summary")
+            if isinstance(resp_text, str) and resp_text.strip():
+                return {**parsed, "response": resp_text.strip()}
+            if parsed.get("insights") or parsed.get("summary"):
+                parts = [parsed.get("insights"), parsed.get("summary")]
+                return {**parsed, "response": "\n\n".join(p for p in parts if p).strip() or "Analysis complete."}
         return {
-            "response": text,
+            "response": "Analysis complete.",
             "code": None,
             "chart_spec": None,
-            "methodology": None
+            "methodology": None,
         }
     
     async def generate_simple_response(
