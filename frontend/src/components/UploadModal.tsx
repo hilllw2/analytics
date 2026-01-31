@@ -2,6 +2,7 @@ import { useState, useCallback, useEffect } from 'react';
 import { useDropzone } from 'react-dropzone';
 import { X, Upload, FileSpreadsheet, AlertCircle, Check, Layers } from 'lucide-react';
 import { useStore } from '../store/useStore';
+import type { Dataset } from '../store/useStore';
 import { api } from '../services/api';
 
 interface UploadModalProps {
@@ -114,7 +115,7 @@ export function UploadModal({ onClose }: UploadModalProps) {
           fullRowCount: d.full_row_count,
         }));
         setDatasets(datasets);
-        const first = datasets.find((d) => d.name === result.active_dataset_name) || datasets[0];
+        const first = datasets.find((d: Dataset) => d.name === result.active_dataset_name) || datasets[0];
         setActiveDataset(first || null);
         setPreviewData(result.preview?.rows || []);
       } else {
@@ -299,12 +300,12 @@ export function UploadModal({ onClose }: UploadModalProps) {
           </button>
           <button
             onClick={handleUpload}
-            disabled={
+            disabled={Boolean(
               !file ||
               uploading ||
               loadingSheets ||
               (file && isExcelFile(file) && sheets && sheets.length > 0 && selectedSheets.size === 0)
-            }
+            )}
             className="btn btn-primary"
           >
             {uploading ? (
