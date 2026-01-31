@@ -1,15 +1,35 @@
 import { useState, useEffect, useRef } from 'react';
-import { RefreshCw, Maximize2, Minimize2 } from 'lucide-react';
+import { RefreshCw, Maximize2, Minimize2, Download } from 'lucide-react';
 import { useStore } from '../store/useStore';
 import { api } from '../services/api';
 
 export function YDataProfilePanel() {
   const { activeDataset } = useStore();
   const [loading, setLoading] = useState(false);
+  const [downloading, setDownloading] = useState(false);
   const [htmlReport, setHtmlReport] = useState<string | null>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const iframeRef = useRef<HTMLIFrameElement>(null);
+
+  const handleDownload = async () => {
+    if (!htmlReport) return;
+    setDownloading(true);
+    try {
+      const blob = await api.downloadYdataProfile(activeDataset?.name);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `ydata_profile_${activeDataset?.name?.replace(/\s+/g, '_') || 'dataset'}.html`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (err: any) {
+      const msg = err.response?.data?.detail || err.message || 'Download failed';
+      setError(msg);
+    } finally {
+      setDownloading(false);
+    }
+  };
 
   const loadProfile = async () => {
     if (!activeDataset) return;
@@ -54,6 +74,16 @@ export function YDataProfilePanel() {
       <div className="p-3 border-b flex items-center justify-between bg-white">
         <span className="text-sm font-medium text-gray-700">YData Profiling Report</span>
         <div className="flex gap-1">
+          {htmlReport && (
+            <button
+              onClick={handleDownload}
+              disabled={downloading}
+              className="p-1.5 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded"
+              title="Download YData profile (HTML)"
+            >
+              <Download className={`w-4 h-4 ${downloading ? 'animate-pulse' : ''}`} />
+            </button>
+          )}
           <button
             onClick={() => setIsFullscreen(!isFullscreen)}
             className="p-1.5 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded"

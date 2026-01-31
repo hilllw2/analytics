@@ -124,6 +124,96 @@ async def export_chart_data(
     )
 
 
+@router.get("/ydata-profile")
+async def download_ydata_profile(
+    session_id: str = Header(..., alias="X-Session-ID"),
+    dataset_name: Optional[str] = Query(None)
+):
+    """
+    Download the YData profiling analysis as an HTML file.
+    Generate the profile from Upload > YData Profile first; it will be cached for download.
+    """
+    session = session_manager.get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found or expired")
+    
+    name = dataset_name or session.active_dataset_name
+    if not name or name not in session.datasets:
+        raise HTTPException(status_code=404, detail="Dataset not found")
+    
+    html = session.cached_results.get(f"ydata_profile_{name}")
+    if not html:
+        raise HTTPException(
+            status_code=404,
+            detail="YData profile not found. Generate it first from Upload > YData Profile, then download."
+        )
+    
+    safe_name = name.replace(" ", "_").replace("/", "-")
+    filename = f"ydata_profile_{safe_name}.html"
+    return StreamingResponse(
+        io.BytesIO(html.encode("utf-8")),
+        media_type="text/html",
+        headers={"Content-Disposition": f"attachment; filename={filename}"}
+    )
+
+
+@router.get("/insights")
+async def download_insights(
+    session_id: str = Header(..., alias="X-Session-ID"),
+    dataset_name: Optional[str] = Query(None)
+):
+    """
+    Download the data quality / health insights (profile) as JSON.
+    Includes missing values, duplicates, warnings, column profiles.
+    """
+    session = session_manager.get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found or expired")
+    
+    name = dataset_name or session.active_dataset_name
+    if not name or name not in session.datasets:
+        raise HTTPException(status_code=404, detail="Dataset not found")
+    
+    insights = session.cached_results.get(f"profile_{name}")
+    if not insights:
+        raise HTTPException(
+            status_code=404,
+            detail="Insights not found. Run data profiling from Upload first, then download."
+        )
+    
+    # Convert to JSON-serializable dict (handle dataclass/datetime)
+    from dataclasses import asdict
+    import datetime as dt
+    
+    if hasattr(insights, "__dataclass_fields__"):
+        data = asdict(insights)
+    else:
+        data = dict(insights) if hasattr(insights, "items") else {"raw": str(insights)}
+    
+    def _serialize(obj):
+        if obj is None or isinstance(obj, (str, int, bool)):
+            return obj
+        if isinstance(obj, dt.datetime):
+            return obj.isoformat()
+        if isinstance(obj, float):
+            return obj
+        if isinstance(obj, dict):
+            return {k: _serialize(v) for k, v in obj.items()}
+        if isinstance(obj, (list, tuple)):
+            return [_serialize(x) for x in obj]
+        try:
+            return float(obj)
+        except (TypeError, ValueError):
+            pass
+        try:
+            return str(obj)
+        except Exception:
+            return None
+    
+    data = _serialize(data)
+    return JSONResponse(content=data)
+
+
 @router.get("/table")
 async def export_table_csv(
     session_id: str = Header(..., alias="X-Session-ID"),
@@ -231,6 +321,19 @@ def _generate_markdown_report(session, dataset, request) -> str:
                 for warning in cached_insights.warnings:
                     lines.append(f"- {warning}")
                 lines.append("")
+    
+    # Add charts section (list chart titles; images are in bundle charts/ folder)
+    if request.include_charts and session.charts:
+        lines.extend([
+            "## Charts",
+            "",
+        ])
+        for chart_id, chart_info in session.charts.items():
+            safe_title = chart_info.title.replace("|", "-")
+            lines.append(f"- **{safe_title}** (type: {chart_info.chart_type})")
+        lines.append("")
+        lines.append("*Chart images are included in the `charts/` folder when you download the full bundle.*")
+        lines.append("")
     
     # Add conversation highlights
     if session.messages:
@@ -348,6 +451,18 @@ def _generate_html_report(session, dataset, request) -> str:
         for warning in cached_insights.warnings:
             html += f'<div class="warning">{warning}</div>\n'
     
+    # Add charts as embedded images (so report is self-contained)
+    if request.include_charts and session.charts:
+        html += "<h2>Charts</h2>\n"
+        for chart_id, chart_info in session.charts.items():
+            b64 = visualization_service.chart_to_base64_png(chart_info)
+            if b64:
+                html += f'<div class="chart-block"><h3>{chart_info.title}</h3>'
+                html += f'<img src="data:image/png;base64,{b64}" alt="{chart_info.title}" class="report-chart" /></div>\n'
+            else:
+                html += f'<div class="chart-block"><h3>{chart_info.title}</h3><p><em>Chart (export failed)</em></p></div>\n'
+        html += '<style>.chart-block{margin:24px 0;}.report-chart{max-width:100%;height:auto;border:1px solid #ddd;border-radius:8px;}</style>\n'
+    
     # Add conversation
     if session.messages:
         html += "<h2>Analysis Performed</h2>\n"
@@ -380,7 +495,8 @@ async def download_bundle(
     session_id: str = Header(..., alias="X-Session-ID")
 ):
     """
-    Download everything as a ZIP bundle (charts, tables, report).
+    Download everything as a ZIP bundle: dataset, charts (with images), reports (with embedded chart images),
+    YData profiling (if generated), and data quality insights (if run).
     """
     session = session_manager.get_session(session_id)
     if not session:
@@ -389,41 +505,82 @@ async def download_bundle(
     if not session.active_dataset:
         raise HTTPException(status_code=400, detail="No dataset loaded")
     
-    # Create ZIP in memory
+    dataset = session.active_dataset
     zip_buffer = io.BytesIO()
     
     with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
-        # Add dataset CSV
-        dataset = session.active_dataset
+        # 1. Dataset CSV
         csv_buffer = io.StringIO()
         dataset.df.to_csv(csv_buffer, index=False)
         zf.writestr(f"data/{dataset.name}.csv", csv_buffer.getvalue())
         
-        # Add charts
+        # 2. Charts: JSON + PNG for each chart (manual and chat-generated)
         for chart_id, chart_info in session.charts.items():
-            # Add Plotly JSON
+            safe_title = chart_info.title.replace(" ", "_").replace("/", "-")[:50]
             zf.writestr(
-                f"charts/{chart_info.title.replace(' ', '_')}_{chart_id[:8]}.json",
+                f"charts/{safe_title}_{chart_id[:8]}.json",
                 json.dumps(chart_info.plotly_json, indent=2)
             )
-            
-            # Try to add PNG
             try:
                 png_bytes = await visualization_service.export_chart_png(chart_info)
-                zf.writestr(
-                    f"charts/{chart_info.title.replace(' ', '_')}_{chart_id[:8]}.png",
-                    png_bytes
-                )
-            except:
+                zf.writestr(f"charts/{safe_title}_{chart_id[:8]}.png", png_bytes)
+            except Exception:
                 pass
         
-        # Add report
+        # 3. Reports (HTML includes embedded chart images; MD lists charts)
         report_request = ReportRequest()
         html_report = _generate_html_report(session, dataset, report_request)
         zf.writestr("report.html", html_report)
-        
         md_report = _generate_markdown_report(session, dataset, report_request)
         zf.writestr("report.md", md_report)
+        
+        # 4. YData profiling HTML (if generated)
+        ydata_html = session.cached_results.get(f"ydata_profile_{dataset.name}")
+        if ydata_html:
+            zf.writestr(f"ydata_profile_{dataset.name.replace(' ', '_')}.html", ydata_html)
+        
+        # 5. Data quality insights JSON (if run)
+        insights = session.cached_results.get(f"profile_{dataset.name}")
+        if insights is not None:
+            from dataclasses import asdict
+            import datetime as dt
+            try:
+                data = asdict(insights) if hasattr(insights, "__dataclass_fields__") else dict(insights)
+                def _ser(o):
+                    if o is None or isinstance(o, (str, int, bool, float)):
+                        return o
+                    if isinstance(o, dt.datetime):
+                        return o.isoformat()
+                    if isinstance(o, dict):
+                        return {k: _ser(v) for k, v in o.items()}
+                    if isinstance(o, (list, tuple)):
+                        return [_ser(x) for x in o]
+                    try:
+                        return float(o)
+                    except (TypeError, ValueError):
+                        return str(o)
+                data = _ser(data)
+                zf.writestr("insights_data_quality.json", json.dumps(data, indent=2))
+            except Exception:
+                pass
+        
+        # 6. README describing bundle contents
+        readme_lines = [
+            "DataChat Analytics – Full Export Bundle",
+            "==========================================",
+            "",
+            "Contents:",
+            "  data/         – Dataset as CSV",
+            "  charts/       – All charts (manual + chat) as JSON and PNG",
+            "  report.html   – Full report with embedded chart images",
+            "  report.md     – Markdown report",
+        ]
+        if ydata_html:
+            readme_lines.append(f"  ydata_profile_*.html – YData profiling analysis")
+        if insights is not None:
+            readme_lines.append("  insights_data_quality.json – Data quality / health insights")
+        readme_lines.extend(["", "Generated: " + datetime.now().strftime("%Y-%m-%d %H:%M")])
+        zf.writestr("README.txt", "\n".join(readme_lines))
     
     zip_buffer.seek(0)
     

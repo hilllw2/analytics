@@ -6,6 +6,7 @@ Handles file upload, parsing, and data ingestion.
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Header, Query
 from fastapi.responses import JSONResponse
 from typing import Optional, List, Any
+import json
 import pandas as pd
 import numpy as np
 from datetime import datetime, date
@@ -518,8 +519,9 @@ async def generate_ydata_profile(
             progress_bar=False
         )
         
-        # Get HTML
+        # Get HTML and cache in session for download/bundle
         html_report = profile.to_html()
+        session.cached_results[f"ydata_profile_{name}"] = html_report
         
         return {"html": html_report}
         
@@ -648,11 +650,13 @@ async def generate_quick_chart(
             margin=dict(l=50, r=30, t=50, b=50)
         )
         
+        # Use to_json() + json.loads() so the result is JSON-serializable (no numpy types)
+        plotly_dict = json.loads(fig.to_json())
         return {
             "chart": {
                 "type": chart_type,
                 "title": chart_title,
-                "plotly_json": fig.to_dict()
+                "plotly_json": plotly_dict
             }
         }
         

@@ -319,6 +319,22 @@ class ApiService {
     return response.data;
   }
 
+  /** Download YData profiling report as HTML (generate from Upload > YData Profile first). */
+  async downloadYdataProfile(datasetName?: string): Promise<Blob> {
+    const params = datasetName ? `?dataset_name=${encodeURIComponent(datasetName)}` : '';
+    const response = await this.client.get(`/export/ydata-profile${params}`, {
+      responseType: 'blob',
+    });
+    return response.data;
+  }
+
+  /** Download data quality / health insights as JSON (run profiling from Upload first). */
+  async downloadInsights(datasetName?: string) {
+    const params = datasetName ? `?dataset_name=${encodeURIComponent(datasetName)}` : '';
+    const response = await this.client.get(`/export/insights${params}`);
+    return response.data;
+  }
+
   async listCharts() {
     const response = await this.client.get('/export/charts');
     return response.data;

@@ -1,10 +1,15 @@
+import { useState, useRef, useEffect } from 'react';
 import { 
   Upload, 
   Download, 
   Database, 
   Lightbulb,
   BarChart3,
-  LogOut
+  LogOut,
+  ChevronDown,
+  FileText,
+  FileJson,
+  PieChart
 } from 'lucide-react';
 import { useStore } from '../store/useStore';
 import { api } from '../services/api';
@@ -22,18 +27,77 @@ export function Header({ onUpload }: HeaderProps) {
     showInsightsPanel,
     clearSession
   } = useStore();
+  const [exportOpen, setExportOpen] = useState(false);
+  const exportRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const close = (e: MouseEvent) => {
+      if (exportRef.current && !exportRef.current.contains(e.target as Node)) setExportOpen(false);
+    };
+    document.addEventListener('click', close);
+    return () => document.removeEventListener('click', close);
+  }, []);
 
   const handleExportBundle = async () => {
+    setExportOpen(false);
     try {
       const blob = await api.downloadBundle();
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = 'datachat_export.zip';
+      a.download = `datachat_export_${new Date().toISOString().slice(0, 10)}.zip`;
       a.click();
       URL.revokeObjectURL(url);
     } catch (error) {
       console.error('Export failed:', error);
+    }
+  };
+
+  const handleExportReport = async () => {
+    setExportOpen(false);
+    try {
+      const blob = await api.generateReport({ format: 'html' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'analysis_report.html';
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (error) {
+      console.error('Report export failed:', error);
+    }
+  };
+
+  const handleExportYdataProfile = async () => {
+    setExportOpen(false);
+    try {
+      const blob = await api.downloadYdataProfile(activeDataset?.name);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `ydata_profile_${activeDataset?.name?.replace(/\s+/g, '_') || 'dataset'}.html`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (err: any) {
+      const msg = err.response?.data?.detail || 'Generate YData profile first (Upload > YData Profile)';
+      alert(msg);
+    }
+  };
+
+  const handleExportDataQuality = async () => {
+    setExportOpen(false);
+    try {
+      const data = await api.downloadInsights(activeDataset?.name);
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'insights_data_quality.json';
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (err: any) {
+      const msg = err.response?.data?.detail || 'Run data profiling first (Upload > Profile)';
+      alert(msg);
     }
   };
 
@@ -104,15 +168,50 @@ export function Header({ onUpload }: HeaderProps) {
           Upload
         </button>
 
-        {/* Export */}
+        {/* Export dropdown */}
         {activeDataset && (
-          <button
-            onClick={handleExportBundle}
-            className="btn btn-secondary flex items-center gap-2"
-          >
-            <Download className="w-4 h-4" />
-            Export
-          </button>
+          <div className="relative" ref={exportRef}>
+            <button
+              onClick={() => setExportOpen(!exportOpen)}
+              className="btn btn-secondary flex items-center gap-2"
+            >
+              <Download className="w-4 h-4" />
+              Export
+              <ChevronDown className="w-4 h-4" />
+            </button>
+            {exportOpen && (
+              <div className="absolute right-0 top-full mt-1 py-1 w-56 bg-white border border-gray-200 rounded-lg shadow-lg z-50">
+                <button
+                  onClick={handleExportBundle}
+                  className="w-full flex items-center gap-2 px-3 py-2 text-left text-sm text-gray-700 hover:bg-gray-50"
+                >
+                  <Download className="w-4 h-4" />
+                  Full bundle (ZIP)
+                </button>
+                <button
+                  onClick={handleExportReport}
+                  className="w-full flex items-center gap-2 px-3 py-2 text-left text-sm text-gray-700 hover:bg-gray-50"
+                >
+                  <FileText className="w-4 h-4" />
+                  Report (HTML, with charts)
+                </button>
+                <button
+                  onClick={handleExportYdataProfile}
+                  className="w-full flex items-center gap-2 px-3 py-2 text-left text-sm text-gray-700 hover:bg-gray-50"
+                >
+                  <PieChart className="w-4 h-4" />
+                  YData profile (HTML)
+                </button>
+                <button
+                  onClick={handleExportDataQuality}
+                  className="w-full flex items-center gap-2 px-3 py-2 text-left text-sm text-gray-700 hover:bg-gray-50"
+                >
+                  <FileJson className="w-4 h-4" />
+                  Data quality (JSON)
+                </button>
+              </div>
+            )}
+          </div>
         )}
 
         {/* End Session */}
