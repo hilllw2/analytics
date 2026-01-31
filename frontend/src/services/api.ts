@@ -75,9 +75,8 @@ class ApiService {
   async getExcelSheets(file: File) {
     const formData = new FormData();
     formData.append('file', file);
-    const response = await this.client.post('/upload/excel-sheets', formData, {
-      headers: { 'Content-Type': 'multipart/form-data' },
-    });
+    // Do not set Content-Type; let browser set it with boundary for multipart
+    const response = await this.client.post('/upload/excel-sheets', formData);
     return response.data;
   }
 
@@ -88,9 +87,7 @@ class ApiService {
     const params = new URLSearchParams();
     if (options?.sampleMode) params.append('sample_mode', 'true');
     if (options?.maxRows) params.append('max_rows', String(options.maxRows));
-    const response = await this.client.post(`/upload/file-excel-multi?${params.toString()}`, formData, {
-      headers: { 'Content-Type': 'multipart/form-data' },
-    });
+    const response = await this.client.post(`/upload/file-excel-multi?${params.toString()}`, formData);
     if (response.data.session_id && !this.sessionId) {
       this.sessionId = response.data.session_id;
     }

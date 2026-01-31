@@ -209,11 +209,20 @@ export function UploadModal({ onClose }: UploadModalProps) {
             Supports CSV, TSV, XLSX, XLS • Max 500MB
           </p>
 
-          {/* Excel: sheet picker (tabs) */}
+          {/* CSV/TSV: single table – explain why no sheet picker */}
+          {file && !isExcelFile(file) && (
+            <div className="mt-4 p-3 bg-blue-50 border border-blue-200 rounded-lg">
+              <p className="text-sm text-blue-800">
+                <strong>Single table.</strong> CSV/TSV files have no sheets. To load multiple sheets (tabs), upload the original <strong>Excel file (.xlsx or .xls)</strong> and choose which sheets to load.
+              </p>
+            </div>
+          )}
+
+          {/* Excel: sheet picker (tabs) – always show when Excel file selected */}
           {file && isExcelFile(file) && (
-            <div className="mt-4 p-3 bg-gray-50 rounded-lg">
+            <div className="mt-4 p-3 bg-primary-50 border border-primary-200 rounded-lg">
               <div className="flex items-center justify-between mb-2">
-                <span className="text-sm font-medium text-gray-700 flex items-center gap-1">
+                <span className="text-sm font-medium text-primary-800 flex items-center gap-1">
                   <Layers className="w-4 h-4" />
                   Sheets (tabs) to load
                 </span>
@@ -221,18 +230,18 @@ export function UploadModal({ onClose }: UploadModalProps) {
                   <button
                     type="button"
                     onClick={selectAllSheets}
-                    className="text-xs text-primary-600 hover:underline"
+                    className="text-xs text-primary-600 hover:underline font-medium"
                   >
                     Select all
                   </button>
                 )}
               </div>
               {loadingSheets ? (
-                <p className="text-sm text-gray-500">Loading sheet list...</p>
+                <p className="text-sm text-primary-700">Loading sheet list...</p>
               ) : sheets && sheets.length > 0 ? (
-                <div className="max-h-32 overflow-y-auto space-y-1">
+                <div className="max-h-40 overflow-y-auto space-y-1">
                   {sheets.map((sheet) => (
-                    <label key={sheet.name} className="flex items-center gap-2 py-1 cursor-pointer">
+                    <label key={sheet.name} className="flex items-center gap-2 py-1.5 cursor-pointer hover:bg-white/50 rounded px-1">
                       <input
                         type="checkbox"
                         checked={selectedSheets.has(sheet.name)}
@@ -247,7 +256,9 @@ export function UploadModal({ onClose }: UploadModalProps) {
                   ))}
                 </div>
               ) : (
-                <p className="text-sm text-gray-500">No sheets found or not an Excel file.</p>
+                <p className="text-sm text-amber-700">
+                  Could not read sheets. Make sure the file is a valid .xlsx or .xls Excel file.
+                </p>
               )}
             </div>
           )}
@@ -291,7 +302,8 @@ export function UploadModal({ onClose }: UploadModalProps) {
             disabled={
               !file ||
               uploading ||
-              (file && isExcelFile(file) && (loadingSheets || selectedSheets.size === 0))
+              loadingSheets ||
+              (file && isExcelFile(file) && sheets && sheets.length > 0 && selectedSheets.size === 0)
             }
             className="btn btn-primary"
           >
