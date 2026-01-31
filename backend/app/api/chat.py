@@ -63,13 +63,19 @@ async def send_message(
             style=request.style
         )
         
-        # Never show raw LLM/JSON in chat: use only the parsed response text
+        # Never show raw LLM/JSON in chat: use only the parsed response text (string or list -> string)
         raw_response = llm_response.get("response", "") or ""
-        if isinstance(raw_response, str) and raw_response.strip().startswith("{"):
-            raw_response = "Analysis complete. See data and chart below."
+        if isinstance(raw_response, list):
+            response_text = "\n".join(str(x).strip() for x in raw_response if x is not None).strip()
+        elif isinstance(raw_response, str):
+            response_text = raw_response.strip()
+        else:
+            response_text = str(raw_response).strip()
+        if response_text.startswith("{"):
+            response_text = "Analysis complete. See data and chart below."
         result = {
             "type": llm_response.get("type", "text"),
-            "response": raw_response.strip() or "Analysis complete.",
+            "response": response_text or "Analysis complete.",
             "methodology": llm_response.get("methodology"),
             "warnings": llm_response.get("warnings", []),
             "data": None,

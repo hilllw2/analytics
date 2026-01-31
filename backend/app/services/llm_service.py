@@ -212,6 +212,17 @@ Output ONLY valid JSON (no markdown, no ```):
                 pass
         return {}
 
+    @staticmethod
+    def _to_display_string(val: Any) -> str:
+        """Convert LLM output (string or list) to a single string for display. Never raise."""
+        if val is None:
+            return ""
+        if isinstance(val, str):
+            return val.strip()
+        if isinstance(val, list):
+            return "\n".join(str(x).strip() for x in val if x is not None).strip()
+        return str(val).strip()
+
     async def process_query(
         self,
         query: str,
@@ -242,8 +253,8 @@ Output ONLY valid JSON (no markdown, no ```):
         try:
             # Agent 1: insights and summary only (never shown as raw JSON)
             agent1 = self._agent_analysis(query, context)
-            insights = (agent1.get("insights") or "").strip()
-            summary = (agent1.get("summary") or "").strip()
+            insights = self._to_display_string(agent1.get("insights"))
+            summary = self._to_display_string(agent1.get("summary"))
             # Build the text we show in chat (insights + summary only)
             response_parts = []
             if insights:
@@ -282,13 +293,14 @@ Output ONLY valid JSON (no markdown, no ```):
         """Parse LLM response; avoid ever returning raw JSON as the displayed response."""
         parsed = self._parse_json_only(text)
         if parsed:
-            # Ensure we never send raw JSON to the user
             resp_text = parsed.get("response") or parsed.get("insights") or parsed.get("summary")
-            if isinstance(resp_text, str) and resp_text.strip():
-                return {**parsed, "response": resp_text.strip()}
-            if parsed.get("insights") or parsed.get("summary"):
-                parts = [parsed.get("insights"), parsed.get("summary")]
-                return {**parsed, "response": "\n\n".join(p for p in parts if p).strip() or "Analysis complete."}
+            display = self._to_display_string(resp_text)
+            if display:
+                return {**parsed, "response": display}
+            ins = self._to_display_string(parsed.get("insights"))
+            summ = self._to_display_string(parsed.get("summary"))
+            if ins or summ:
+                return {**parsed, "response": "\n\n".join(p for p in (ins, summ) if p) or "Analysis complete."}
         return {
             "response": "Analysis complete.",
             "code": None,
