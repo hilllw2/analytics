@@ -17,9 +17,9 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# Install runtime deps only if needed (e.g. for weasyprint)
+# Install runtime deps for weasyprint (PDF export); use correct Debian package names
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    libpango-1.0-0 libpangocairo-1.0-0 libgdk-pixbuf2.0-0 libffi-dev shared-mime-info \
+    libpango-1.0-0 libpangocairo-1.0-0 libgdk-pixbuf-2.0-0 libffi-dev shared-mime-info \
     && rm -rf /var/lib/apt/lists/*
 
 COPY backend/requirements.txt ./
