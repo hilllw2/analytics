@@ -62,11 +62,15 @@ async def upload_file(
     session_id: Optional[str] = Header(None, alias="X-Session-ID"),
     sample_mode: bool = Query(False, description="Preview mode with sampled data"),
     max_rows: Optional[int] = Query(None, description="Max rows to load"),
-    sheet_name: Optional[str] = Query(None, description="Sheet name for Excel files")
+    sheet_name: Optional[str] = Query(None, description="Sheet name for Excel files"),
+    clean_pivot: bool = Query(True, description="Run cleaning pipeline: drop all-NaN rows/columns (recommended for pivot tables)"),
+    drop_na_rows: str = Query("all", description="Drop rows: 'all' = only all-NaN rows, 'any' = rows with any NaN")
 ):
     """
     Upload a data file (CSV, TSV, XLSX, XLS).
     
+    Cleaning pipeline (when clean_pivot=True): drops columns that are entirely NaN,
+    and rows that are entirely NaN (or rows with any NaN if drop_na_rows='any').
     Creates a new session if no session_id provided.
     """
     # Validate file type
@@ -99,13 +103,15 @@ async def upload_file(
         session = session_manager.create_session()
     
     try:
-        # Load the file
+        # Load the file (cleaning pipeline runs by default for pivot-table uploads)
         df, metadata = await data_ingestion.load_file(
             content=content,
             filename=file.filename,
             sheet_name=sheet_name,
             sample_mode=sample_mode,
-            max_rows=max_rows
+            max_rows=max_rows,
+            clean_pivot=clean_pivot,
+            drop_na_rows=drop_na_rows if drop_na_rows in ("all", "any") else "all"
         )
         
         # Create dataset info
@@ -135,7 +141,8 @@ async def upload_file(
                 "categorical_columns": metadata.get("categorical_columns", []),
                 "is_sampled": metadata.get("is_sampled", False),
                 "full_row_count": metadata.get("full_row_count"),
-                "warnings": metadata.get("warnings", [])
+                "warnings": metadata.get("warnings", []),
+                "cleaning_applied": metadata.get("cleaning_applied")
             },
             "preview": {
                 "rows": preview_data,
@@ -171,6 +178,8 @@ async def upload_excel_multi_sheets(
     session_id: Optional[str] = Header(None, alias="X-Session-ID"),
     sample_mode: bool = Query(False),
     max_rows: Optional[int] = Query(None),
+    clean_pivot: bool = Query(True, description="Run cleaning pipeline (drop all-NaN rows/columns)"),
+    drop_na_rows: str = Query("all", description="'all' = drop only all-NaN rows, 'any' = drop rows with any NaN"),
 ):
     """
     Upload an Excel file and load multiple sheets as separate datasets (tabs).
@@ -213,6 +222,8 @@ async def upload_excel_multi_sheets(
                 sheet_name=sheet_name,
                 sample_mode=sample_mode,
                 max_rows=max_rows,
+                clean_pivot=clean_pivot,
+                drop_na_rows=drop_na_rows if drop_na_rows in ("all", "any") else "all",
             )
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"Failed to load sheet '{sheet_name}': {str(e)}")

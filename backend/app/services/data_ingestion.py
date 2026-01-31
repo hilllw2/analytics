@@ -137,13 +137,61 @@ class DataIngestionService:
         wb.close()
         return sheets
     
+    def _run_cleaning_pipeline(
+        self,
+        df: pd.DataFrame,
+        metadata: Dict[str, Any],
+        drop_na_rows: str = "all",
+        drop_na_cols: bool = True
+    ) -> pd.DataFrame:
+        """
+        Cleaning pipeline for pivot-table-style uploads.
+        - Drops columns where all values are NaN.
+        - Drops rows where all values are NaN (or where any value is NaN if drop_na_rows='any').
+        """
+        initial_rows, initial_cols = len(df), len(df.columns)
+        
+        # Drop columns that are entirely NaN
+        if drop_na_cols:
+            cols_before = set(df.columns)
+            df = df.dropna(axis=1, how="all")
+            dropped_cols = cols_before - set(df.columns)
+            if dropped_cols:
+                metadata["warnings"].append(
+                    f"Cleaning: dropped {len(dropped_cols)} empty column(s): {list(dropped_cols)[:5]}{'...' if len(dropped_cols) > 5 else ''}"
+                )
+        
+        # Drop rows: all-NaN only ('all') or any-NaN ('any')
+        if drop_na_rows:
+            rows_before = len(df)
+            if drop_na_rows == "all":
+                df = df.dropna(axis=0, how="all")
+            elif drop_na_rows == "any":
+                df = df.dropna(axis=0, how="any")
+            dropped_rows = rows_before - len(df)
+            if dropped_rows > 0:
+                metadata["warnings"].append(
+                    f"Cleaning: dropped {dropped_rows} row(s) ({'all-NaN' if drop_na_rows == 'all' else 'with any NaN'})"
+                )
+        
+        if initial_rows != len(df) or initial_cols != len(df.columns):
+            metadata["cleaning_applied"] = {
+                "rows_before": initial_rows,
+                "rows_after": len(df),
+                "cols_before": initial_cols,
+                "cols_after": len(df.columns),
+            }
+        return df
+    
     async def load_file(
         self,
         content: bytes,
         filename: str,
         sheet_name: Optional[str] = None,
         sample_mode: bool = False,
-        max_rows: Optional[int] = None
+        max_rows: Optional[int] = None,
+        clean_pivot: bool = True,
+        drop_na_rows: str = "all"
     ) -> Tuple[pd.DataFrame, Dict[str, Any]]:
         """
         Load a file into a DataFrame with metadata.
@@ -154,6 +202,8 @@ class DataIngestionService:
             sheet_name: For Excel files, which sheet to load
             sample_mode: If True, load only a sample for preview
             max_rows: Maximum rows to load (None for all)
+            clean_pivot: If True, run cleaning pipeline (drop all-NaN rows/cols) for pivot tables
+            drop_na_rows: 'all' = drop only rows that are all NaN; 'any' = drop rows with any NaN; '' = don't drop rows
         
         Returns:
             Tuple of (DataFrame, metadata dict)
@@ -185,6 +235,8 @@ class DataIngestionService:
             
             # Post-processing
             df = self._clean_column_names(df)
+            if clean_pivot:
+                df = self._run_cleaning_pipeline(df, metadata, drop_na_rows=drop_na_rows, drop_na_cols=True)
             df = await self._infer_and_convert_types(df, metadata)
             
             metadata["row_count"] = len(df)

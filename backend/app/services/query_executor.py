@@ -57,28 +57,44 @@ def serialize_df_to_records(df: pd.DataFrame) -> List[dict]:
     return records
 
 
+def _safe_import(name: str, globals=None, locals=None, fromlist=(), level=0):
+    """Restricted __import__ that only allows whitelisted modules. Used so LLM-generated code can use 'import pandas' etc."""
+    # Normalize: "pandas as pd" is from importlib; we only get first part here
+    base = name.split('.')[0].strip()
+    if base not in ('pandas', 'numpy', 'datetime', 'math', 'scipy'):
+        raise ImportError(f"Import of '{name}' is not allowed. Use the pre-injected 'pd', 'np', and 'df' instead.")
+    return __import__(name, globals, locals, fromlist, level)
+
+
 class SafeExecutor:
     """
     Safely executes pandas code with restricted globals.
     """
     
-    # Allowed modules and functions
+    # Allowed modules and functions (include __import__ so "import pandas" in generated code works)
+    # Also include getattr/setattr/type/repr and common exceptions so LLM-generated code doesn't hit NameError
     SAFE_BUILTINS = {
         'abs', 'all', 'any', 'bool', 'dict', 'enumerate', 'filter',
         'float', 'format', 'frozenset', 'int', 'isinstance', 'len',
         'list', 'map', 'max', 'min', 'pow', 'print', 'range', 'reversed',
         'round', 'set', 'slice', 'sorted', 'str', 'sum', 'tuple', 'zip',
-        'True', 'False', 'None'
+        'getattr', 'setattr', 'hasattr', 'type', 'repr', 'ord', 'chr',
+        'iter', 'next', 'object', 'property', 'staticmethod',
+        'Exception', 'BaseException', 'ValueError', 'KeyError', 'IndexError',
+        'TypeError', 'AttributeError', 'ZeroDivisionError', 'RuntimeError',
+        'StopIteration', 'AssertionError', 'ImportError',
+        'True', 'False', 'None', '__import__'
     }
     
-    # Dangerous patterns to block
+    # Dangerous patterns to block (do not block __import__ - we provide safe one)
     BLOCKED_PATTERNS = [
-        'import os', 'import sys', 'import subprocess',
-        '__import__', 'eval(', 'exec(', 'compile(',
+        'import os', 'import sys', 'import subprocess', 'import builtins',
+        'from os ', 'from sys ', 'from subprocess ', 'from builtins ',
+        'eval(', 'exec(', 'compile(',
         'open(', 'file(', 'input(',
         'globals(', 'locals(', 'vars(',
-        '__builtins__', '__code__', '__class__',
-        'system(', 'popen(', 'spawn',
+        '__code__', '__class__', '__subclasses__',
+        'system(', 'popen(', 'spawn', 'getattr(__builtins__',
     ]
     
     def __init__(self):
@@ -110,8 +126,22 @@ class SafeExecutor:
         """Create a restricted globals dict for code execution."""
         import scipy.stats as scipy_stats
         
+        # Build safe builtins: standard safe names + our restricted __import__
+        _builtins_src = __builtins__ if isinstance(__builtins__, dict) else __builtins__
+        safe_builtins_dict = {}
+        for name in self.SAFE_BUILTINS:
+            if name == '__import__':
+                safe_builtins_dict['__import__'] = _safe_import
+                continue
+            if isinstance(_builtins_src, dict):
+                if name in _builtins_src:
+                    safe_builtins_dict[name] = _builtins_src[name]
+            else:
+                if hasattr(_builtins_src, name):
+                    safe_builtins_dict[name] = getattr(_builtins_src, name)
+        
         safe_globals = {
-            # Core data tools
+            # Core data tools (so code can use pd, np, df without importing)
             'pd': pd,
             'np': np,
             'df': df.copy(),  # Work on a copy
@@ -119,14 +149,8 @@ class SafeExecutor:
             # Statistics
             'stats': scipy_stats,
             
-            # Safe builtins
-            '__builtins__': {
-                name: getattr(__builtins__, name) if hasattr(__builtins__, name) 
-                      else __builtins__[name] if isinstance(__builtins__, dict) else None
-                for name in self.SAFE_BUILTINS
-                if (hasattr(__builtins__, name) if not isinstance(__builtins__, dict) 
-                    else name in __builtins__)
-            },
+            # Safe builtins (includes restricted __import__ so "import pandas" etc. works)
+            '__builtins__': safe_builtins_dict,
             
             # Commonly needed
             'datetime': __import__('datetime'),
@@ -150,6 +174,9 @@ class SafeExecutor:
     ) -> Dict[str, Any]:
         """
         Execute pandas code safely and return the result.
+        
+        Note: timeout_seconds is reserved for future use (enforcing it would require
+        running code in a subprocess). Long-running code can block the worker.
         
         Returns:
             Dict with 'success', 'result', 'result_type', 'stdout', 'error'
@@ -374,13 +401,19 @@ class QueryExecutor:
                 result[key] = make_serializable(v)
         return result
     
+    @staticmethod
+    def _escape_single_quotes(s: str) -> str:
+        """Escape single quotes for use inside single-quoted Python string literals."""
+        return s.replace("\\", "\\\\").replace("'", "\\'")
+    
     async def execute_filter(
         self,
         session: Session,
         filter_expr: str
     ) -> Dict[str, Any]:
         """Apply a filter to the active dataset."""
-        code = f"result = df.query('{filter_expr}')"
+        escaped = self._escape_single_quotes(filter_expr)
+        code = f"result = df.query('{escaped}')"
         return await self.execute_query(code, session)
     
     async def execute_aggregation(
@@ -391,8 +424,8 @@ class QueryExecutor:
         agg_func: str
     ) -> Dict[str, Any]:
         """Execute a groupby aggregation."""
-        group_cols = ", ".join([f"'{c}'" for c in group_by])
-        code = f"result = df.groupby([{group_cols}])['{agg_column}'].{agg_func}().reset_index()"
+        group_cols = ", ".join([f"'{self._escape_single_quotes(c)}'" for c in group_by])
+        code = f"result = df.groupby([{group_cols}])['{self._escape_single_quotes(agg_column)}'].{agg_func}().reset_index()"
         return await self.execute_query(code, session)
     
     async def execute_sort(
@@ -403,7 +436,8 @@ class QueryExecutor:
         top_n: Optional[int] = None
     ) -> Dict[str, Any]:
         """Sort and optionally limit results."""
-        code = f"result = df.sort_values('{sort_column}', ascending={ascending})"
+        escaped_col = self._escape_single_quotes(sort_column)
+        code = f"result = df.sort_values('{escaped_col}', ascending={ascending})"
         if top_n:
             code += f".head({top_n})"
         return await self.execute_query(code, session)
