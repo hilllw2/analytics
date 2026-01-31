@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useStore } from './store/useStore';
 import { api } from './services/api';
 import { Header } from './components/Header';
+import { SheetTabs } from './components/SheetTabs';
 import { Sidebar } from './components/Sidebar';
 import { ChatPanel } from './components/ChatPanel';
 import { DataPanel } from './components/DataPanel';
@@ -55,6 +56,7 @@ function App() {
   return (
     <div className="h-screen flex flex-col bg-gray-50">
       <Header onUpload={() => setShowUpload(true)} />
+      <SheetTabs />
       <SessionBanner />
       
       <div className="flex-1 flex overflow-hidden">
