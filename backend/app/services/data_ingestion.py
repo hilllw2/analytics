@@ -10,6 +10,7 @@ from datetime import datetime
 import chardet
 import io
 import re
+import warnings
 from pathlib import Path
 
 from app.core.config import settings
@@ -40,6 +41,13 @@ class DataIngestionService:
         '%B %d, %Y',
         '%d %b %Y',
         '%d %B %Y',
+        '%Y-%m-%dT%H:%M:%S.%f',
+        '%Y-%m-%dT%H:%M:%S.%fZ',
+        '%m/%d/%y',
+        '%d/%m/%y',
+        '%Y%m%d',
+        '%d-%b-%Y',
+        '%d-%B-%Y',
     ]
     
     def __init__(self):
@@ -407,11 +415,15 @@ class DataIngestionService:
             except Exception:
                 continue
         
-        # Try generic datetime parsing
+        # Try generic datetime parsing (mixed formats / dateutil)
         try:
-            parsed = pd.to_datetime(sample, errors='coerce')
+            with warnings.catch_warnings():
+                warnings.simplefilter('ignore', UserWarning)
+                parsed = pd.to_datetime(sample, errors='coerce')
             if parsed.notna().sum() / len(sample) > 0.8:
-                full_parsed = pd.to_datetime(series, errors='coerce')
+                with warnings.catch_warnings():
+                    warnings.simplefilter('ignore', UserWarning)
+                    full_parsed = pd.to_datetime(series, errors='coerce')
                 return 'datetime', full_parsed
         except Exception:
             pass
